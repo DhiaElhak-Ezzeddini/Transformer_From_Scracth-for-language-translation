@@ -57,7 +57,7 @@ def get_dataset(config):
     
     for item in raw_dataset :       
         src_ids = tokenizer_src.encode(item['translation'][config["lang_src"]]).ids
-        tgt_ids = tokenizer_src.encode(item['translation'][config["lang_tgt"]]).ids
+        tgt_ids = tokenizer_tgt.encode(item['translation'][config["lang_tgt"]]).ids
         
         max_len_src = max(max_len_src , len(src_ids))
         max_len_tgt = max(max_len_tgt , len(tgt_ids))
@@ -110,7 +110,7 @@ def validation(model , val_ds, tokenizer_src , tokenizer_tgt , max_len , device 
         for batch in val_ds : 
             count += 1 
             encoder_input = batch["encoder_input"].to(device)
-            encoder_mask = batch["encoder_mask"].to(device)
+            encoder_mask  = batch["encoder_mask"].to(device)
 
             assert encoder_input.size(0) ==1 ,  "Batch size must be 1 fr validation data "
             
