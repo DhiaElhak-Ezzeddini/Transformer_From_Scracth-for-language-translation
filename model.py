@@ -18,7 +18,7 @@ class InputEmbedding(nn.Module):
     def forward(self,x):
         return self.embedding(x) * math.sqrt(self.dim_model)
 
-## Positional Encoding ==> vectors of size 512 , computed only once 
+## Positional Encoding ==> vectors of size dim_model , computed only once 
 ## and reused for every sentence during training and inference 
 
 class PositionalEncoding(nn.Module):
@@ -35,18 +35,18 @@ class PositionalEncoding(nn.Module):
         
         ## denominator of the formula 
         div_term = torch.exp(torch.arange(0,dim_model,2).float() * (-math.log(10000.0) / dim_model)) 
-        ## sin to even positions 
+        ## sine to even positions 
         pos_enc[:,0::2] = torch.sin(position*div_term)
-        ## cos to odd position
+        ## cosine to odd position
         pos_enc[:,1::2] = torch.cos(position * div_term)
         
         ## shape (1,seq_len,dim_model) // because we have a batch of sentences 
         pos_enc = pos_enc.unsqueeze(0) 
 
-        self.register_buffer('pos_enc' , pos_enc) ## to be saved (not like a parameter of the model)      ==> the tensor will be saved in the buffer 
+        self.register_buffer('pos_enc' , pos_enc) ## to be saved (not like a parameter of the model) ==> the tensor will be saved in the buffer 
         
     def forward(self,x) : 
-        x = x + (self.pos_enc[:, :x.shape[1] ,:]).requires_grad_(False) ## Not to be learned 
+        x = x + (self.pos_enc[:, :x.shape[1] ,:]).requires_grad_(False) ## Not to be learned // x : embedded input
         return self.dropout(x)
 
 ## Normalization Layer ( add&norm )
@@ -54,7 +54,7 @@ class PositionalEncoding(nn.Module):
 class LayerNormalization(nn.Module) : 
     def __init__(self,eps:float=10**-6) -> None : 
         super().__init__()
-        self.eps = eps
+        self.eps = eps ## to avoid dividing by zero
         self.alpha = nn.Parameter(torch.ones(1)) ## Multiplied ==> to be learned 
         self.bias  = nn.Parameter(torch.ones(1)) ## Added ==> to be learned  
         
@@ -65,13 +65,13 @@ class LayerNormalization(nn.Module) :
         return self.alpha * (x - mean) / (std + self.eps) + self.bias 
  
 ## Feed Forward layer 
-class FeedForwardLayer(nn.Module) : 
+class FeedForwardLayer(nn.Module) : ### ==> explore more features in a higher dimension space 
     def __init__(self, dim_ff:int , dim_model:int , dropout:float) : 
         super().__init__()
         
-        self.linear_1 = nn.Linear(dim_model,dim_ff) ## Matrix W1 and B1 
-        self.dropout  = nn.Dropout(dropout)         ## RelU layer ( max(0,..) )
-        self.linear_2 = nn.Linear(dim_ff,dim_model) ## W2 and B2
+        self.linear_1 = nn.Linear(dim_model,dim_ff)  
+        self.dropout  = nn.Dropout(dropout)         
+        self.linear_2 = nn.Linear(dim_ff,dim_model) 
         
     def forward(self,x) :
         # (batch , seq_len , d_model) --> (batch , seq_len , dff) --> (batch , seq_len , d_model)
@@ -89,31 +89,31 @@ class MultiHeadAttention(nn.Module) :
         super().__init__()
         self.dim_model = dim_model
         self.h = h
-        assert dim_model % h == 0 , "dim_model is not divisible by h !!" 
+        assert dim_model % h == 0 , "dim_model is not divisible by h (number of heads) !!" 
         self.d_k = dim_model // h
         self.w_q = nn.Linear(dim_model,dim_model)   ## Matrix W for the Queries 
         self.w_k = nn.Linear(dim_model,dim_model)   ## Matrix W for the Keys 
         self.w_v = nn.Linear(dim_model,dim_model)   ## Matrix W for the Values
-        self.w_o = nn.Linear(dim_model,dim_model) 
+        self.w_o = nn.Linear(dim_model,dim_model)   ## Matrix W for output projection layer 
         self.dropout = nn.Dropout(dropout)
         
     @staticmethod ## we can call it without having an instance of the MultiHeadAttention class
     def attention(query , key , value, mask,dropout:nn.Dropout) : 
-        d_k = query.shape[-1] ## last dim of the query
-        attention_scores = (query @ key.transpose(-2,-1)) / math.sqrt(d_k) ## matrix multiplication 
+        d_k = query.shape[-1] ## last dim of the query (the model dimension of the specific head)
+        attention_scores = (query @ key.transpose(-2,-1)) / math.sqrt(d_k) ## matrix multiplication ===> scaled dot product attention 
         if mask is not None : 
-            attention_scores.masked_fill_(mask==0,-1e9)
+            attention_scores.masked_fill_(mask==0,-1e9) ## softmax(-1e9) ~ 0.0 
             
-        attention_scores = attention_scores.softmax(dim=-1) ## (batch , h , seq_len , d_k ) --> (batch , h , seq_len , seq_len) 
+        attention_scores = attention_scores.softmax(dim=-1) ## (batch , h , seq_len , seq_len ) --> (batch , h , seq_len , ses_len) 
         
         if dropout is not None:
             attention_scores = dropout(attention_scores)
             
-        return (attention_scores @ value) , attention_scores ## (batch , h , seq_len , d_k) /// (d_v is the same as d_k)
+        return (attention_scores @ value) , attention_scores ## (attention_scores @ value) : (batch , h , seq_len , seq_len ) --> (batch , h , seq_len , d_k) 
 
     def forward(self,q,k,v,mask) : # if wa want some words to do not interact with other words we mask them 
         query = self.w_q(q) # (batch , seq_len , d_model) --> (batch , seq_len , d_model)
-        key = self.w_k(k)   # (batch , seq_len , d_model) --> (batch , seq_len , d_model)
+        key   = self.w_k(k) # (batch , seq_len , d_model) --> (batch , seq_len , d_model)
         value = self.w_v(v) # (batch , seq_len , d_model) --> (batch , seq_len , d_model)
         
         ## (batch , seq_len , dim_model) --> (batch ,seq_len , h , d_k ) --> (batch , h , seq_len , d_k ) 
@@ -125,7 +125,7 @@ class MultiHeadAttention(nn.Module) :
         
         
         x , self.attention_scores = MultiHeadAttention.attention(query,key,value,mask,self.dropout)
-        ## (batch , h , seq_len , d_k ) --> (Batch , seq_len , h , d_k) --> ## (batch , seq_len , dim_model)
+        ## (batch , h , seq_len , d_k ) --> (Batch , seq_len , h , d_k) --> ## (batch , seq_len , dim_model= h * d_k)
         x = x.transpose(1,2).contiguous().view(x.shape[0] , -1 , self.h*self.d_k)
         
         ## (batch , seq_len , d_model) --> (batch , seq_len , d_model)
@@ -200,13 +200,13 @@ class Decoder(nn.Module):
         return self.norm(x)
 
 class ProjectionLayer(nn.Module):
-    def __init__(self,dim_model , vocab_size)->None:
+    def __init__(self,dim_model,vocab_size)->None:
         super().__init__()
         self.proj = nn.Linear(dim_model,vocab_size)
     def forward(self,x):
         ## (Batch, seq_len , dim_model) => (Batch , seq_len , vocab_size)
         x = self.proj(x)
-        x = torch.log_softmax(x , dim=-1)
+        x = torch.log_softmax(x , dim=-1) ## probability across all the vocabulary size (across all the tokens in the vocabulary to predict the next token)   
         return x 
     
      
@@ -253,15 +253,15 @@ def Build_Transformer(src_vocab_size:int , tgt_vocab_size:int , src_seq_len:int 
 
      ## Creating the encoder blocks
     encoder_blocks = []
-    for i in range(N) : 
+    for _ in range(N) : 
         encoder_self_attention_block = MultiHeadAttention(dim_model,h,dropout)
         feed_forward_block = FeedForwardLayer(d_ff,dim_model,dropout)
         encoder_block = EncoderBlock(encoder_self_attention_block , feed_forward_block , dropout)
         encoder_blocks.append(encoder_block)
     ## Creating the decoder blocks
     decoder_blocks = []
-    for i in range(N) : 
-        decoder_self_attention_block = MultiHeadAttention(dim_model,h,dropout)
+    for _ in range(N) : 
+        decoder_self_attention_block  = MultiHeadAttention(dim_model,h,dropout)
         decoder_cross_attention_block = MultiHeadAttention(dim_model,h,dropout)
         feed_forward_block = FeedForwardLayer(d_ff,dim_model,dropout)
         decoder_block = DecoderBlock(decoder_self_attention_block,decoder_cross_attention_block , feed_forward_block,dropout)
