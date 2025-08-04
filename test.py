@@ -2,7 +2,7 @@ from pathlib import Path
 import torch 
 import torch.nn as nn 
 from config import get_config , get_weights_file_path 
-from train import get_model , get_dataset , validation 
+from train_original import get_model , get_dataset , validation 
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
